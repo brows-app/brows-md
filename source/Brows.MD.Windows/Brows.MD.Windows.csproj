@@ -4,6 +4,7 @@
     <Description>A styleable WPF viewer for Markdown documents.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Net.Http" Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework'" />
     <PackageReference Include="Markdig" />
     <None Include="../../third-party/Markdig/LICENSE.txt" Pack="true" PackagePath="third-party/Markdig/" />
   </ItemGroup>

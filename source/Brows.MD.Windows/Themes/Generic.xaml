@@ -145,6 +145,7 @@
       <Setter.Value>
         <Style TargetType="{x:Type Image}">
           <Setter Property="Stretch" Value="Uniform" />
+          <Setter Property="StretchDirection" Value="DownOnly" />
           <Setter Property="MaxWidth" Value="640" />
         </Style>
       </Setter.Value>

@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Resource Include="Resources/Icon.gif" />
     <ProjectReference Include="../../source/Brows.MD.Windows/Brows.MD.Windows.csproj" />
   </ItemGroup>
 </Project>

@@ -42,7 +42,8 @@ Bind `Markdown` to a string property. An editor can also drive the preview direc
 
 The control coalesces edits, parses on a worker, and yields to the dispatcher during document construction.
 The previous document stays visible until the latest revision is ready. A source change rebuilds the document.
-Changing a semantic style updates the existing elements in place.
+Changing a semantic style updates the existing elements in place. The preview displays a size notice above 250,000 UTF-16 code
+units, 2,000 Markdown blocks, or 8,000 total syntax nodes (including inlines).
 
 ## Markdown support
 
@@ -53,15 +54,30 @@ the language identifier through the paragraph's `Tag`. If the parser rejects exc
 displays the original source.
 
 Links expose their destination through `Hyperlink.NavigateUri`. Handle the bubbling `Hyperlink.RequestNavigate`
-event on the control or its parent to choose how your application opens links. Images load through WPF's bitmap
-codecs and expose their alternative text to automation. Relative image paths resolve against the control's WPF
-base URI. When previewing a file, set `BaseUriHelper.BaseUriProperty` on the control to the source file's absolute
-URI before assigning `Markdown`. Image references can access local files and network locations.
+event on the control or its parent to choose how your application opens links.
+
+The default `MarkdownImageLoading="Disabled"` displays alternative text and skips image I/O. Set the property
+to `LocalFiles` to allow non-UNC file URIs or to `LocalAndRemote` to also allow UNC, HTTP, and HTTPS URIs.
+Both enabled modes also allow compiled WPF resources under `pack://application:,,,/`. Loose pack content and
+site-of-origin resources fall back to alternative text. Mapped drives and redirected paths can still reach
+remote storage in `LocalFiles` mode.
+Relative image paths resolve against the control's WPF base URI. For a file preview, set
+`BaseUriHelper.BaseUriProperty` to the source file's absolute URI before assigning `Markdown`.
+Enabled images display selectable alternative text while loading and keep it if the load fails.
+HTTP and HTTPS image responses are limited to 16 MiB. Edits reuse loaded images while their resolved URI
+remains in the preview. File changes in length or last-write time refresh the image in the background on the
+next edit.
+The default image style scales down to fit the available width with a maximum of 640 DIPs.
 
 ## Semantic styles
 
 Each property accepts a WPF `Style` for the corresponding element. Set properties on an individual control
-or in a shared style targeting `MarkdownControl`.
+or in a shared style targeting `MarkdownControl`. The document inherits the control's font properties.
+Set any of those properties in `MarkdownDocumentStyle` to override the inherited values.
+
+A setter in `MarkdownTextStyle` applies directly to literal runs and takes precedence over values those runs
+inherit from headings and other blocks. Code-block text inherits its formatting from `MarkdownCodeBlockStyle`.
+Use `MarkdownParagraphStyle` to set prose formatting at the paragraph level.
 
 | Dependency properties | Style target |
 | --- | --- |

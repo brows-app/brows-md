@@ -3,11 +3,9 @@ using Markdig.Extensions.TaskLists;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Net;
-using System.Runtime.InteropServices;
-using System.Security;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -30,12 +28,17 @@ using WpfInline = System.Windows.Documents.Inline;
 namespace Brows.Windows.Controls;
 
 internal sealed class MarkdownRenderer {
+    private const int MaximumBlocks = 2_000;
+    private const int MaximumSyntaxNodes = 8_000;
+
     private static readonly DependencyProperty[] HeadingStyles = [
         MarkdownHeading1StyleProperty, MarkdownHeading2StyleProperty, MarkdownHeading3StyleProperty,
         MarkdownHeading4StyleProperty, MarkdownHeading5StyleProperty, MarkdownHeading6StyleProperty
     ];
 
     private readonly Uri BaseUri;
+    private readonly MarkdownImageLoading ImageLoading;
+    private readonly MarkdownImageCache Images;
     private readonly CancellationToken Cancellation;
     private readonly Stopwatch Slice = Stopwatch.StartNew();
 
@@ -107,7 +110,7 @@ internal sealed class MarkdownRenderer {
         for (var node = source?.FirstChild; node is not null; node = node.NextSibling) {
             await YieldIfNeededAsync();
             var inline = node is LinkInline { IsImage: true } image
-                ? await CreateImageAsync(image)
+                ? CreateImage(image)
                 : CreateInline(node);
             if (node is ContainerInline children && inline is Span span) {
                 await AddInlinesAsync(children, span.Inlines);
@@ -116,7 +119,7 @@ internal sealed class MarkdownRenderer {
         }
     }
 
-    private Run Text(string value) {
+    private static Run Text(string value) {
         return Styled(new Run(value), MarkdownTextStyleProperty);
     }
 
@@ -154,26 +157,26 @@ internal sealed class MarkdownRenderer {
 
     private static Hyperlink CreateLink(string address, string title) {
         var link = Styled(new Hyperlink(), MarkdownLinkStyleProperty);
-        link.ToolTip = title;
+        if (!string.IsNullOrEmpty(title)) {
+            link.ToolTip = title;
+        }
         if (Uri.TryCreate(address, UriKind.RelativeOrAbsolute, out var uri)) {
             link.NavigateUri = uri;
         }
         return link;
     }
 
-    private static BitmapImage LoadFileImage(Uri uri) {
-        using (var stream = File.OpenRead(uri.LocalPath)) {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.StreamSource = stream;
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
+    private bool CanLoadImage(Uri uri) {
+        if (uri.IsFile) {
+            return ImageLoading == MarkdownImageLoading.LocalAndRemote || !uri.IsUnc;
         }
+        if (uri.Scheme == "pack") {
+            return uri.Authority.Equals("application:,,,", StringComparison.OrdinalIgnoreCase);
+        }
+        return ImageLoading == MarkdownImageLoading.LocalAndRemote && uri.Scheme is "http" or "https";
     }
 
-    private async Task<WpfInline> CreateImageAsync(LinkInline link) {
+    private WpfInline CreateImage(LinkInline link) {
         var url = link.GetDynamicUrl?.Invoke() ?? link.Url;
         var description = new StringBuilder();
         foreach (var child in link.Descendants()) {
@@ -196,32 +199,42 @@ internal sealed class MarkdownRenderer {
             }
         }
         var alt = description.ToString();
-        if (!Uri.TryCreate(BaseUri, url, out var uri)) {
+        Uri uri = null;
+        var canLoad = ImageLoading != MarkdownImageLoading.Disabled &&
+            Uri.TryCreate(BaseUri, url, out uri) && CanLoadImage(uri);
+        if (!canLoad) {
             return Text(alt);
         }
-        var image = new Image { ToolTip = link.Title ?? alt };
-        image.SetResourceReference(FrameworkElement.StyleProperty, MarkdownImageStyleProperty);
-        AutomationProperties.SetName(image, alt);
-        var host = new InlineUIContainer(image);
-        image.ImageFailed += (_, _) => host.Child = new TextBlock { Text = alt };
-        try {
-            if (uri.IsFile) {
-                image.Source = await Task.Run(() => LoadFileImage(uri), Cancellation);
-                Cancellation.ThrowIfCancellationRequested();
+        var tooltip = string.IsNullOrEmpty(link.Title) ? alt : link.Title;
+        var source = Images.Get(uri);
+        WpfInline BuildInline(BitmapImage bitmap) {
+            if (bitmap is null) {
+                return Text(alt);
             }
-            else {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = uri;
-                bitmap.EndInit();
-                image.Source = bitmap;
+            var image = new Image { Source = bitmap };
+            if (!string.IsNullOrEmpty(tooltip)) {
+                image.ToolTip = tooltip;
             }
+            image.SetResourceReference(FrameworkElement.StyleProperty, MarkdownImageStyleProperty);
+            AutomationProperties.SetName(image, alt);
+            return new InlineUIContainer(image);
         }
-        catch (Exception ex) when (ex is IOException or NotSupportedException or FormatException or
-            UnauthorizedAccessException or WebException or ArgumentException or COMException or SecurityException) {
-            return Text(alt);
+
+        var inline = BuildInline(source);
+        void Update(BitmapImage bitmap) {
+            if (ReferenceEquals(bitmap, source) || inline.Parent is null) {
+                return;
+            }
+            var siblings = inline.SiblingInlines;
+            var replacement = BuildInline(bitmap);
+            siblings.InsertBefore(inline, replacement);
+            siblings.Remove(inline);
+            source = bitmap;
+            inline = replacement;
         }
-        return host;
+        ImageRequests.TryGetValue(uri, out var notify);
+        ImageRequests[uri] = notify + Update;
+        return inline;
     }
 
     private async Task AddBlockAsync(MarkdownBlock source, BlockCollection target) {
@@ -238,7 +251,7 @@ internal sealed class MarkdownRenderer {
                 target.Add(text);
                 break;
             case CodeBlock code:
-                var preformatted = Styled(new Paragraph(Text(code.Lines.ToString())), MarkdownCodeBlockStyleProperty);
+                var preformatted = Styled(new Paragraph(new Run(code.Lines.ToString())), MarkdownCodeBlockStyleProperty);
                 if (code is FencedCodeBlock fenced && !string.IsNullOrEmpty(fenced.Info)) {
                     preformatted.Tag = fenced.Info;
                 }
@@ -261,15 +274,32 @@ internal sealed class MarkdownRenderer {
         }
     }
 
-    internal MarkdownRenderer(Uri baseUri, CancellationToken cancellationToken) {
+    internal const int MaximumSourceLength = 250_000;
+
+    internal Dictionary<Uri, Action<BitmapImage>> ImageRequests { get; } = [];
+
+    internal MarkdownRenderer(Uri baseUri, MarkdownImageLoading imageLoading, MarkdownImageCache images,
+        CancellationToken cancellationToken) {
+        Images = images;
         BaseUri = baseUri;
+        ImageLoading = imageLoading;
         Cancellation = cancellationToken;
     }
 
     internal async Task<FlowDocument> RenderAsync(MarkdownDocument syntax, string source) {
-        var document = Styled(new FlowDocument(), MarkdownDocumentStyleProperty);
-        if (syntax is null) {
-            document.Blocks.Add(Styled(new Paragraph(Text(source)), MarkdownParagraphStyleProperty));
+        /*
+         * WPF's FlowDocument theme sets font values that would take precedence over inheritance.
+         */
+        var document = Styled(new FlowDocument { OverridesDefaultStyle = true }, MarkdownDocumentStyleProperty);
+        var exceedsLimit = source.Length > MaximumSourceLength ||
+            (syntax is not null && (syntax.Descendants<MarkdownBlock>().Skip(MaximumBlocks).Any() ||
+                syntax.Descendants().Skip(MaximumSyntaxNodes).Any()));
+        if (exceedsLimit) {
+            var notice = new Run("This document exceeds the preview size limit.");
+            document.Blocks.Add(Styled(new Paragraph(notice), MarkdownParagraphStyleProperty));
+        }
+        else if (syntax is null) {
+            document.Blocks.Add(Styled(new Paragraph(new Run(source)), MarkdownParagraphStyleProperty));
         }
         else {
             await AddBlocksAsync(syntax, document.Blocks);

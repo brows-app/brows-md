@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net10.0-windows</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="MarkdownSampleApp.xaml" />
+    <Resource Include="FieldNote.md" />
+    <ProjectReference Include="../../source/Brows.MD.Windows/Brows.MD.Windows.csproj" />
+    <None Include="../../third-party/Markdig/LICENSE.txt" Link="third-party/Markdig/LICENSE.txt"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

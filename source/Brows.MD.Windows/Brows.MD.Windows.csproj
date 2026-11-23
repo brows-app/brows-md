@@ -1,0 +1,10 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Description>A styleable WPF viewer for Markdown documents.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Markdig" />
+    <None Include="../../third-party/Markdig/LICENSE.txt" Pack="true" PackagePath="third-party/Markdig/" />
+  </ItemGroup>
+</Project>
